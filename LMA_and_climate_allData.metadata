@@ -1,0 +1,32 @@
+Metadata for file LMA_and_climate_allData.metadata
+
+The file contains yearly observations of remote sensing estimations of LMA (and different versions of iLMA), a few other vegetation indices (NDMI, NIRv,), climate variables, and a few different classifications for the vegetation (vegType, PFT, woodyNonWoody). Each row contains the a yearly observation of all these variables for a given site (and, as is the case for NEON and Colorado sites, for a given repetition within a site).
+
+All remote sensing observations comes from Landsat imagery that were averaged over a 2 month period around the date of the date of the peak of the growing season. I would suggest to ignore all remote sensing data (NDMI, NIRv, iLMAs) except for LMA column. LMA should be the one we care (response variable), I like it because iLMA may be in meaningless units and values (because its just an index), but LMA is iLMA transformed to meaningfull values.
+
+Here I explain each column, its units.
+
+site		name for the sites, each site has a unique name
+year		year of the observation. The file has climate data since 1981, but remote sensing estimates of LMA (and the other vegetation indices) are only available from 1985 to 2019.
+VPDmean		annual mean monthly VPD in kPa
+VPDmax		annual maximum monthly VPD in kPa
+VPDmin		annual minimum monthly VPD in kPa
+precip		annual total precipitation in mm
+Tmean		annual mean monthly air temperature in Celsius
+Tmax		annual maximum monthly air temperature in Celsius
+Tmin		annual minimum monthly air temperature in Celsius
+SPEI12		12 month scale SPEI from December, as a measure of annual SPEI
+plot		name for the plot within a given site. Only available for sites from Colorado.
+iLMArmbl	iLMA (remote sensing index for LMA), its value calculated using a constant calibrated from field sites from Colorado
+iLMAneon	iLMA (remote sensing index for LMA), its value calculated using a constant calibrated from NEON field sites
+iLMAopt	iLMA (remote sensing index for LMA), its value calculated using a constant calibrated from data from all sources (Colorado, NEON, Macrosystems)
+NDMI		NDMI vegetation index. Only provided for reference.
+NIRv		NIRv vegetation index. Only provided for reference.
+nRef		number of remote sensing observations used to get the yearly value for all remote sensing observations. 
+LMA		LMA in g cm-2 estimated from an ecuation linking iLMAopt with regressed against LMA obsvations in the field
+vegType		a classification of vegetation type that comes directly from my feelings.
+plotID		the name of the plot within a given site. Only available for NEON sites. This column is an error that should have been merged with 'plot' column
+PFT		a broad classification of dominant plant functional types, similar to the IGBP classese. Includes a broadleaf for broadleaf forest (and 1 shrubland), conifer (for conifer forest), grass (for grasslands)
+woodyNonWoody	classifies the vegetation of the sites as woody or nonWoody
+
+*LMAmad, LMAmean, LMAsd are columns that I used for removing outliers but should not be used anymore.

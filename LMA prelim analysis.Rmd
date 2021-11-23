@@ -1,0 +1,339 @@
+---
+title: "LMA analysis"
+author: "Teresa Bohner"
+date: "5/28/2021"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Questions/Goals
+This is my general take on what the overarching goals of this analysis are. Just trying to write down everything. Can be adjusted as necessary. 
+
+1. Assess/quantify shifts in LMA
+
+2. Identify/quantify overall climate drivers of fluctuations/shifts in LMA
+
+3. Are some PFTs more responsive than others?
+
+4. Do temporal shifts reflect what we'd expect from spatial differences?
+
+```{r packages, message=FALSE}
+library(tidyverse)
+library(GGally) 
+library(lme4)
+library(DHARMa)
+library(ggeffects)
+```
+## Data
+For now I filtered out any site/plots that have fewer than 10 observations.
+
+```{r data}
+alldata <- read.csv("LMA_and_climate_allData.csv") %>% 
+  mutate(plot=ifelse(!is.na(plotID), plotID, plot)) %>% 
+  group_by(site, plot) %>% 
+  mutate(nobs=n()) %>% 
+  filter(nobs>=10)
+
+```
+
+There are ~1k obs that have no iLMA (and also have other missing info...they only have environmental data)
+```{r explore, echo=FALSE}
+alldata %>% 
+  filter(!is.na(LMA)) %>% 
+  group_by(site) %>% 
+  summarize_all(first) %>% 
+  group_by(PFT) %>% tally()
+
+plots <- alldata %>% 
+  filter(!is.na(LMA)) %>% 
+  group_by(site) %>% 
+  summarize(PFT=first(PFT),
+            n=length(unique(plot)))
+
+
+# plot(alldata, aes(year, LMA, color=site)) +
+#   stat_summary(geom = "line", fun = mean) +
+#   theme(legend.position = 'none') +
+#   ggtitle("Site level temporal trends")
+
+hist(alldata$LMA)
+hist(log(alldata$LMA))
+
+
+  
+
+# ggplot(filter(alldata, site=="SOAP"), aes(year, LMA, color=plot)) +
+#   geom_line() +
+#   theme(legend.position = 'none')
+
+# forplot <- alldata %>% 
+#   mutate(rownum=seq(1, n())) %>% 
+#   ungroup() %>% 
+#   dplyr::select( c(VPDmean, precip, Tmean, SPEI12))
+# ggpairs(forplot)
+```
+
+## Changes over time
+Changes over time will be tricky. Even with an AR1 term we still get some autocorrelation of the residuals. Looks like we have an overall decline in log(LMA over time). Looks like the plot to plot variability in changes through time is pretty small
+```{r mod-time, eval=F}
+sub <- alldata %>% 
+  mutate(plot=ifelse(is.na(plot), "1", plot)) %>% 
+  filter_at(vars(year, site, LMA), all_vars(!is.na(.))) %>% 
+  mutate_at(vars(LMA), log) %>% 
+  filter(str_detect(site, "ANDT")) %>% 
+  mutate_at(vars(year), scale)
+
+sub <- alldata %>% 
+  filter_at(vars(year, site, LMA), all_vars(!is.na(.))) %>% 
+  mutate_at(vars(LMA), log) %>% 
+  filter(!is.na(plot)) %>% 
+  filter(site%in%c( "SOAP", "SERC", "ORNL", "DEJU", "JERC", "TALL", "HARV", "GRSM")) %>% 
+  mutate_at(vars(year), scale)
+
+ggplot(sub, aes(year, LMA, color=site)) +
+  geom_point() +
+  geom_smooth(method='lm')
+
+ggplot(sub, aes(year, VPDmax, color=site)) +
+  geom_point() +
+  geom_smooth(method='lm')
+
+sub_sub <- alldata %>% 
+  filter_at(vars(year, site, LMA), all_vars(!is.na(.))) %>% 
+  mutate_at(vars(LMA), log) %>% 
+  filter(!is.na(plot)) %>% 
+  filter(site%in%c( "SERC")) %>% 
+  mutate_at(vars(year), scale)
+
+ggplot(sub_sub, aes(year, LMA, color=plot)) +
+  geom_point() +
+  geom_smooth( se=F)
+
+# library(brms)
+# 
+# b1 <- brm(LMA~year + (year|site), data=sub, cores=4, iter=1000)
+# b2 <- brm(Tmean~year + (year|site), data=sub, cores=4, iter=1000)
+
+library(tidybayes)
+get_variables(b1)
+
+draws <- b1 %>%
+  spread_draws(b_year, r_site[site,term]) %>% 
+  mutate(lma_shift=b_year +r_site) %>% 
+  filter(term=='year') %>% 
+  dplyr::select(-c(b_year, r_site))
+
+draws2 <- b2 %>%
+  spread_draws(b_year, r_site[site,term]) %>% 
+  mutate(temp_shift=b_year +r_site) %>% 
+  filter(term=='year') %>% 
+  dplyr::select(-c(b_year, r_site))
+
+# draws2 <- b2 %>%
+#   spread_draws(b_year) %>% 
+#   rename(temp_shift=b_year)
+
+
+ggplot(draws, aes(lma_shift, fill=site)) +
+  geom_density(alpha=0.6) +
+  geom_vline(xintercept = 0, linetype='dashed')
+
+ggplot(draws2, aes(temp_shift, fill=site)) +
+  geom_density(alpha=0.6) +
+  geom_vline(xintercept = 0, linetype='dashed')
+
+
+newdata <- left_join(draws, draws2)
+
+newdata2 <- newdata %>% 
+  group_by(site) %>% 
+  summarize(lma_mean=mean(lma_shift),
+            lma_sd=sd(lma_shift),
+            t_mean=mean(temp_shift),
+            t_sd=sd(temp_shift))
+
+ggplot(newdata, aes(temp_shift, lma_shift, color=site)) +
+  geom_point()
+
+b3 <- brm(lma_shift~temp_shift, data=newdata, cores=4, iter=1000)
+
+b4 <- brm(lma_mean|se(lma_sd)~ 1 + me(t_mean, t_sd), data=newdata2, cores=4, iter=1000)
+
+b5 <- brm(lma_mean|se(lma_sd)~ 1 + t_mean, data=newdata2, cores=4, iter=1000)
+
+m1 <- nlme::lme(LMA~year, data=sub, random= ~year|site/plot)
+
+m2 <- nlme::lme(LMA~year, data=sub, random= ~year|site/plot, correlation = nlme::corAR1(form=~year|site/plot))
+
+plot(nlme::ACF(m2,resType="normalized"),alpha=0.05)
+
+summary(m2)
+
+```
+
+## Changes with environmental variables
+If we use environmental variables as predictors we seem to avoid this issue for the most part, although the question is different. 
+
+This is a generic first pass at some model competition/selection. Probably want to look at the environmental variables more carefully. As we up the complexity, specifically with any random slopes models we quickly run into convergence issues. Possible reasons to switch to Bayesian. 
+
+
+```{r mod1}
+
+## create a plot dummy variable for when there is only one plot per site
+## filter data so that it doesn't contain any NA's for key variables.
+## scale the predictor variables
+sub <- alldata %>% 
+  mutate(plot=ifelse(is.na(plot), "1", plot)) %>% 
+  filter_at(vars(LMA, year, VPDmean, site), all_vars(!is.na(.))) %>% 
+  mutate_at(vars(VPDmean, Tmean, precip), scale) %>% 
+  mutate_at(vars(LMA), log)
+  
+
+m1 <- lmer(LMA~VPDmean +(1|site/plot) + (1|PFT), data=sub, REML = F)
+m1a <- lmer(LMA~VPDmax +(1|site/plot) + (1|PFT), data=sub, REML = F)
+m2 <- lmer(LMA~Tmean +(1|site/plot) + (1|PFT), data=sub, REML = F)
+m2a <- lmer(LMA~Tmax +(1|site/plot) + (1|PFT), data=sub, REML = F)
+m2b <- lmer(LMA~Tmin +(1|site/plot) + (1|PFT), data=sub, REML = F)
+m3 <- lmer(LMA~precip +(1|site/plot) + (1|PFT), data=sub, REML = F)
+m4 <- lmer(LMA~SPEI12 +(1|site/plot) + (1|PFT), data=sub, REML = F)
+
+bbmle::AICtab(m1, m1a, m2, m2a, m2b, m3, m4)
+
+m5 <- lmer(LMA~Tmean + VPDmean +(1|site/plot) + (1|PFT), data=sub, REML = F)
+m6 <- lmer(LMA~Tmean + precip +(1|site/plot) + (1|PFT), data=sub, REML = F)
+m7 <- lmer(LMA~Tmean + SPEI12 +(1|site/plot) + (1|PFT), data=sub, REML = F)
+
+bbmle::AICtab(m2, m5, m6, m7)
+car::vif(m6)
+
+m8 <- lmer(LMA~Tmean*precip +(1|site/plot) + (1|PFT), data=sub, REML = F)
+bbmle::AICtab(m6, m8)
+car::vif(m8)
+performance::icc(m8, by_group = T)
+
+m6 <- lmer(LMA~Tmean + precip +(1|site/plot) + (1|PFT), data=sub, REML = T)
+
+m8 <- lmer(LMA~Tmean*precip +(1|site/plot) + (1|PFT), data=sub, REML = T)
+m9 <- lmer(LMA~Tmean*precip +(1|site/plot) + (Tmean|PFT), data=sub, REML = T)
+m10 <- lmer(LMA~Tmean *precip +(1|site/plot) + (precip|PFT), data=sub, REML = T) 
+m11 <- lmer(LMA~Tmean *precip +(1|site/plot) + (Tmean + precip|PFT), data=sub, REML = T) 
+
+
+bbmle::AICtab(m8, m9, m10)
+car::vif(m9)
+performance::r2(m9)
+
+## From the DHARMa package 
+sim_out <- simulateResiduals(fittedModel = m9)
+res <- recalculateResiduals(sim_out, group = sub$year) ## this gives us average residuals across all the groups (aggregated by time). Might want to look at them independently.
+testTemporalAutocorrelation(res, time = unique(sub$year))
+
+plot(m9)
+
+summary(m9)
+coef(m9)$PFT
+
+# library(brms)
+
+# m8b <- brm(LMA~Tmean + precip +(Tmean|site:plot), data=sub, cores=4, iter=1000)
+
+```
+
+Residuals look ok. Autocorrelation tests look ok. From this model, results say that log(LMA) decreases with increasing temperature and increasing precipitation (Overall within each plot). There is some variability in the intercepts (basically the overall LMA value for each plot) and we allowed for random PFT slopes with temperature (different PFTs can have different responses to changes in temperature). In general conifers have the steepest decline in LMA with temperature, the other PFT's are much more flat. Be wary of trying to understand the values at this point beyond direct comparsion. The coefficients are based on standardized coefficients so we can say now that the effect of precip here is equivalent to the effect of temperature, but we will need to do some effect sizes/back transformation to say something like for a degree of warming we see X change in LMA. 
+
+We could also consider PFT as a fixed effect (although groups are uneven). makes some inference a little easier.
+
+```{r pft-fixef}
+
+m12 <- lmer(LMA~Tmean + precip + PFT + Tmean:precip + Tmean:PFT +(1|site/plot), data=sub, REML = T) 
+
+car::vif(m12)
+performance::r2(m12)
+performance::icc(m12)
+
+mydf <- ggpredict(m12, terms = c("precip", "PFT")) 
+
+ggplot(mydf, aes(x = x, y = predicted, colour = group, label=group)) +
+  geom_ribbon(aes(ymin=conf.low, ymax=conf.high, fill = group), alpha=0.3, color=NA)+
+  geom_line() +
+  xlab ("stnorm(Temp)") + ylab("Predicted iLMA") +
+  theme_minimal() +
+  ggtitle("Model estimates and 95%CI")
+
+means <- modelbased::estimate_means(m12, modulate = "Tmean", length=3)
+means
+
+slopes <- modelbased::estimate_slopes(m12, trend = "Tmean")
+
+
+contrasts <- modelbased::estimate_contrasts(m12, modulate = "Tmean", length=3)
+contrasts
+
+contrasts <- modelbased::estimate_contrasts(m12, modulate = "Tmean", length = 100)
+# Create a variable with the two levels concatenated
+contrasts$Contrast <- paste(contrasts$Level1, "-", contrasts$Level2)
+
+# Visualise the changes in the differences
+ggplot(contrasts, aes(x = Tmean, y = Difference)) +
+  geom_ribbon(aes(fill = Contrast, ymin = CI_low, ymax = CI_high), alpha = 0.2) +
+  geom_line(aes(colour = Contrast), size = 1) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  theme_minimal() +
+  ylab("Difference")
+
+
+```
+
+## Trait shifits through time
+```{r shift-est}
+
+shift_dat <- alldata %>% 
+  mutate(plot=ifelse(is.na(plot), "1", plot)) %>% 
+  filter_at(vars(LMA, site), all_vars(!is.na(.))) %>% 
+  group_by(site, plot) %>% 
+  mutate(minyear=min(year),
+         maxyear=max(year)) %>% 
+  filter(year==minyear|year==maxyear) %>% 
+  mutate(t=ifelse(year==minyear, 1, 2))
+
+shift_dat2 <- shift_dat %>% 
+  ungroup() %>% 
+  dplyr::select(c(site, PFT, t, year, plot, LMA, Tmean)) %>% 
+  pivot_wider(id_cols=c(site, plot, PFT), names_from = t, values_from = c(LMA, year, Tmean)) %>% 
+  mutate(year_diff=year_2-year_1,
+         LMA_diff=(LMA_2-LMA_1)/year_diff,
+         T_diff=(Tmean_2-Tmean_1)/year_diff) %>% 
+  filter(year_diff>5)
+
+
+ggplot(shift_dat2, aes(T_diff, LMA_diff, color=PFT)) +
+  geom_point() +
+  geom_smooth(method="lm")
+
+library(broom)
+shift_lma <- shift_dat %>% 
+  group_by(site, plot, PFT) %>%
+  do(fit = tidy(lm(LMA ~ year, data = .))) %>% 
+  unnest() %>% 
+  filter(term=="year")
+
+shift_tmean <- shift_dat %>% 
+  group_by(site, plot, PFT) %>%
+  do(fit = tidy(lm(Tmean ~ year, data = .))) %>% 
+  unnest() %>% 
+  filter(term=="year")
+
+allshift <- left_join(shift_lma, shift_tmean, by=c("site", "plot", "PFT", "term")) %>% 
+  filter(estimate.y<0.4)
+
+ggplot(allshift, aes(estimate.y, estimate.x, color=PFT)) +
+  geom_point() +
+  geom_smooth(method="lm")
+
+```
+
